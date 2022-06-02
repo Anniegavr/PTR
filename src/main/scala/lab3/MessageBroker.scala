@@ -38,26 +38,32 @@ class MessageReceivingQueue(is: BufferedReader, actorForAllMess: ActorRef) exten
 case object listenForConn
 
 class ActorForConnection(ss: ServerSocket, actorForAllMess : ActorRef) extends Actor {
+
   def receive = {
     case listenForConn =>
       val sock = ss.accept()
+      val allProducers = util.ArrayList[String]()
+      val allConsumers = util.ArrayList[String]()
+      val subscribedTopic:Map[UUID,String] = Map()
       val is = new BufferedReader(new InputStreamReader(sock.getInputStream()))
-      val os = new PrintStream(sock.getOutputStream()) //new PrintStream(new BufferedOutputStream(sock.getOutputStream()))
-      val uuid = UUID.randomUUID().toString
-      println("Client connected: " + uuid.substring(0, 4))
-
-      val clientType = is.readLine
+      val os = new PrintStream(sock.getOutputStream())
+      val uuid = UUID.randomUUID()
+      println("Client connected: " + uuid.toString.substring(0, 4))
+      val clientType = is.readLine //Reading the type of client
       if (clientType.equals("producer")) {
+        allProducers.add(uuid.toString)
         val messageReceivingQueue = context.actorOf(Props(classOf[MessageReceivingQueue], is, actorForAllMess), "messageReceivingQueueActor")
         messageReceivingQueue ! listenForMess
         println("Producer connected")
       } else if (clientType.equals("consumer")) {
+        allConsumers.add(uuid.toString)
         val topics = is.readLine
-        println("Consumer connected")
-        actorForAllMess ! ConsumersCommunication(os, is)
+        println(topics)
+        subscribedTopic.+(uuid -> topics)
+        println("Consumer connected for topic "+topics )
+        actorForAllMess ! ConsumersCommunication(os, is, topics)
       }
       self ! listenForConn
-
   }
 }
 
@@ -78,8 +84,11 @@ class ReceiveAllMessActor(messManager : ActorRef) extends Actor{
           Base64.getEncoder().encode(stream.toByteArray),
           StandardCharsets.UTF_8
         )
-        println("sending to consumer")
-        consumer.os.println(retv)
+        
+        if(consumer.topic.equals(message.topic)){
+          println("sending to consumer")
+          consumer.os.println(retv)
+        }
         println("sending to manager")
         messManager ! ConsumerToAck(consumer, message)
       }

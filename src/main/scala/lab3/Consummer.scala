@@ -6,6 +6,7 @@ import lab3.Producer.{os, producerSystem}
 import java.io.{BufferedReader, ByteArrayInputStream, ByteArrayOutputStream, FileNotFoundException, InputStreamReader, ObjectInputStream, ObjectOutputStream, PrintStream}
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import java.util.{Base64, Properties, UUID}
@@ -65,26 +66,22 @@ class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
 }
 
 object Consumer extends App{
-
-
   val host = "localhost"
   val port = 4444
   val sock = new Socket(host, port)
   val is = new BufferedReader(new InputStreamReader(sock.getInputStream))
   val ps = new PrintStream(sock.getOutputStream)
   var sendNow = new AtomicBoolean(true)
+  val chosenTopic = scala.util.Random.between(0,2)
 
   val clientType = "consumer"
-  val valueType = "troopers"
+  val valueType = List[String]("troopers", "Yoda", "Mandalorians")
 
   ps.println(clientType)
-  ps.println(valueType)
-
+  ps.println(valueType(chosenTopic))
 
   val consumerSystem = ActorSystem("derConsumerSystem")
 
   val messageSender = consumerSystem.actorOf(Props(classOf[ConsumerMessagesReceive], is, ps), "consumerMessagesReceive")
   messageSender ! ReceiveMess
-
-
 }
