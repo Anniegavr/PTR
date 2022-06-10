@@ -13,6 +13,7 @@ import java.util.{Base64, Properties, UUID}
 import scala.io.Source
 
 case object ReceiveMess
+
 class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
 {
 
@@ -41,7 +42,7 @@ class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
           }
         })
         if(!exists){
-          println("Received             : " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
+          println("Received: " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
           receivedMessages.add(msgo)
           val msg2 = new Confirm(msgo.id)
           println("Sending confirmation:" + msgo.id)
