@@ -1,23 +1,26 @@
 package lab3
 
 import akka.actor.{Actor, ActorSystem, Props}
+import lab3.Consumer.{consumerSystem, is, ps}
 import lab3.Producer.{os, producerSystem}
 
 import java.io.{BufferedReader, ByteArrayInputStream, ByteArrayOutputStream, FileNotFoundException, InputStreamReader, ObjectInputStream, ObjectOutputStream, PrintStream}
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import java.util.{Base64, Properties, UUID}
 import scala.io.Source
 
-case object ReceiveMess
+case object receiveMess
+case object confirmMess
+
 class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
 {
-
   val receivedMessages = new ConcurrentLinkedQueue[Message]()
   def receive = {
-    case ReceiveMess =>
+    case receiveMess =>
 
 //      println("checking")
       if(is.ready){
@@ -40,7 +43,7 @@ class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
           }
         })
         if(!exists){
-          println("Received             : " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
+          println("Received: " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
           receivedMessages.add(msgo)
           val msg2 = new Confirm(msgo.id)
           println("Sending confirmation:" + msgo.id)
@@ -56,35 +59,54 @@ class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
 
         }
       }
-
       Thread.sleep(100)
 
-      self ! ReceiveMess
+      self ! receiveMess
 
   }
 }
 
+//class MessagesConfirmer(msgo : Message, is: BufferedReader, ps: PrintStream) extends Actor
+//{
+//
+//  val receivedMessages = new ConcurrentLinkedQueue[Message]()
+//  def receive = {
+//    case confirmMess : Confirm =>
+//      println("Received: " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
+//      receivedMessages.add(msgo)
+//      val msg2 = new Confirm(msgo.id)
+//      println("Sending confirmation:" + msgo.id)
+//      val stream2: ByteArrayOutputStream = new ByteArrayOutputStream()
+//      val oos2 = new ObjectOutputStream(stream2)
+//      oos2.writeObject(msg2)
+//      oos2.close()
+//      val retv2 = new String(
+//        Base64.getEncoder().encode(stream2.toByteArray),
+//        StandardCharsets.UTF_8
+//      )
+//      ps.println(retv2)
+//  }
+//}
+
+
 object Consumer extends App{
-
-
   val host = "localhost"
   val port = 4444
   val sock = new Socket(host, port)
   val is = new BufferedReader(new InputStreamReader(sock.getInputStream))
   val ps = new PrintStream(sock.getOutputStream)
   var sendNow = new AtomicBoolean(true)
+  val chosenTopic = scala.util.Random.between(0,2)
 
   val clientType = "consumer"
-  val valueType = "troopers"
+  val valueType = List[String]("troopers", "Yoda", "Mandalorians")
 
   ps.println(clientType)
-  ps.println(valueType)
-
+  ps.println(valueType(chosenTopic))
 
   val consumerSystem = ActorSystem("derConsumerSystem")
 
-  val messageSender = consumerSystem.actorOf(Props(classOf[ConsumerMessagesReceive], is, ps), "consumerMessagesReceive")
-  messageSender ! ReceiveMess
+  val consumerMessageReceiver = consumerSystem.actorOf(Props(classOf[ConsumerMessagesReceive], is, ps), "consumerMessagesReceive")
 
-
+  consumerMessageReceiver ! receiveMess
 }
