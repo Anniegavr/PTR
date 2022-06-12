@@ -8,10 +8,16 @@ import java.nio.charset.StandardCharsets
 import java.util.{Base64, UUID}
 
 case object SendMess
+
 class MessageSender(os: PrintStream) extends Actor{
   def receive = {
     case SendMess =>
-      val msg = new Message(UUID.randomUUID().toString, 1, "troopers", 77)
+
+      val producerValueType = List[String]("troopers", "Yoda", "Mandalorians")
+      val chosenTopic = scala.util.Random.between(0,2)
+      val priority  = scala.util.Random.between(0,3)
+      val valueOfMessage = scala.util.Random.between(0,200)
+      val msg = new Message(UUID.randomUUID().toString, priority, producerValueType(chosenTopic), valueOfMessage)
       println("priority " + msg.priority + " | "+ msg.topic + " " + msg.value)
       val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
       val oos = new ObjectOutputStream(stream)

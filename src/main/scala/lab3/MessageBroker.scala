@@ -10,8 +10,8 @@ import java.util.{Base64, Properties, UUID}
 
 //TODO create objects for consumer's commands
 case object listenForConsumerMess
-case object ListenForConfirm
-case object sendMess
+case object listenForConfirm
+case object sendMessToConsumer
 
 //TODO create objects for producer's commands
 case object listenForMess
@@ -20,8 +20,8 @@ case object listenForMess
 case object listenForConn
 
 //TODO create class to receive confirm from consumer
-class ConfirmationReceiver(is: BufferedReader, msgManager: ActorRef) extends Actor{ //from consumer
-  val messages = util.ArrayList[Confirm]()
+class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef) extends Actor{ //from consumer
+//  val messages = util.ArrayList[Confirm]()
 
   def receive = {
     case listenForConsumerMess =>
@@ -32,9 +32,9 @@ class ConfirmationReceiver(is: BufferedReader, msgManager: ActorRef) extends Act
         val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
         ois.readObject match {
           case msg: Confirm =>
-            println("Message received: id:" + msg.id)
-            messages.add(msg)
-            msgManager ! msg  //this is the manager
+            println("Confirmatyion received: id:" + msg.id)
+//            messages.add(msg)
+            messageSender ! msg  //this is the manager
           case _ => throw new Exception("I didn't subscribe for dis, scammer")
         }
         ois.close()
@@ -78,25 +78,55 @@ class ConfirmationReceiver(is: BufferedReader, msgManager: ActorRef) extends Act
 
 /**
  * Actor that sends messages to its dedicated consumer (1 MsgSender per each consumer)
- * @param os - outpur stream - the stream to which the sender publishes messages
+ * @param os - output stream - the stream to which the sender publishes messages
  */
 class MsgSender(os: PrintStream) extends Actor{
+  val messagesToSend = util.ArrayList[Message]()
+
+  override def postStop(): Unit = {
+    println("Sender stopped :P ")
+  }
   def receive = {
-    case SendMess =>
-      val orderNo = 0
-      val msg = new Message((orderNo+1).toString+"&"+UUID.randomUUID().toString, 1, "troopers", 77)
-      println("priority " + msg.priority + " | "+ msg.topic + " " + msg.value)
+//    case sendMessToConsumer =>
+
+//      if (messagesToSend.size() > 0){
+//        Thread.sleep(1000)
+//        self ! sendMess
+//      }
+    case message : Message =>
+      println("Sender: New message with id "+message.id)
+
+      messagesToSend.add(message)
+//      self ! sendMessToConsumer
       val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
       val oos = new ObjectOutputStream(stream)
-      oos.writeObject(msg)
+      //TODO fix priority instead of hardcoded index - foreach, if
+      oos.writeObject(messagesToSend.get(0))
       oos.close()
       val retv = new String(
         Base64.getEncoder().encode(stream.toByteArray),
         StandardCharsets.UTF_8
       )
       os.println(retv)
-      Thread.sleep(10000)
-      self ! SendMess
+    case confirm : Confirm =>
+      println("Sender received confirmation for "+confirm.id)
+      println("Current queue: ")
+      var idOfMsgToDelete = 0
+      var incrementId = true
+      messagesToSend.forEach( message => {
+        println(message.id)
+        if (confirm.id == message.id) {
+          incrementId = false
+        }
+        if (incrementId){
+          idOfMsgToDelete+=1
+        }
+      })
+      println("Sender: removing message "+messagesToSend.get(idOfMsgToDelete).id)
+      messagesToSend.remove(idOfMsgToDelete)
+
+      println("Sender: msg 2 send size: "+messagesToSend.size().toString)
+
   }
 }
 
@@ -105,7 +135,7 @@ class MsgSender(os: PrintStream) extends Actor{
  * @param is - a buffered reader through which the broker receives and decodes messages
  * @param messageManager
  */
-class MessageReceivingQueue(is: BufferedReader, messageManager: ActorRef) extends Actor{
+class MessageReceiving(is: BufferedReader, messageManager: ActorRef) extends Actor{
   val messages = util.ArrayList[Message]()
 
   def receive = {
@@ -119,7 +149,7 @@ class MessageReceivingQueue(is: BufferedReader, messageManager: ActorRef) extend
           case msg: Message =>
             println("Message received: id:" + msg.id + ", topic:" + msg.topic + ", value:" + msg.value)
             messages.add(msg)
-            messageManager ! msg  //this is the manager
+            messageManager ! msg
           case _ => throw new Exception("Dis is not a message from client, scammer")
         }
         ois.close()
@@ -136,7 +166,7 @@ class MessageReceivingQueue(is: BufferedReader, messageManager: ActorRef) extend
  * @param messageManager - reference to the actor that manages messages to be sent to consumer
  * @param messagesConfirmer - reference to the actor on the consumer's side that sends confirmation back to the broker
  */
-class ConnectionActor(ss: ServerSocket, messageManager : ActorRef, messagesConfirmer : ActorRef) extends Actor {
+class ConnectionActor(ss: ServerSocket, messageManager : ActorRef) extends Actor {
   val allProducers = util.ArrayList[String]()
   val allConsumers = util.ArrayList[String]()
   def receive = {
@@ -150,8 +180,9 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef, messagesConfi
       val clientType = is.readLine //Reading the type of client
       if (clientType.equals("producer")) {
         allProducers.add(uuid.toString)
-        val messageReceivingQueue = context.actorOf(Props(classOf[MessageReceivingQueue], is, messageManager), "messageReceivingQueueActor"+uuid)
-        messageReceivingQueue ! listenForMess
+        //is for receving msges from producer & msgManager to send the received mesg
+        val messageReceiving = context.actorOf(Props(classOf[MessageReceiving], is, messageManager), "messageReceivingActor"+uuid)
+        messageReceiving ! listenForMess
         println("Producer connected")
       } else if (clientType.equals("consumer")) {
         allConsumers.add(uuid.toString)
@@ -159,13 +190,14 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef, messagesConfi
         println(topics)
         subscribedTopic.+(uuid -> topics)
         println("Consumer connected for topic "+topics )
-        messageManager ! ConsumersCommunication(os, is, topics) //comment it
+
         //TODO 1. create an actor to send messages from manager to consumer, send him the os
-        val messageSender = context.actorOf(Props(classOf[MsgSender], is, messagesConfirmer), "messageSenderForConsumerQueueActor"+uuid)
+        val msgSender = context.actorOf(Props(classOf[MsgSender], os), "messageSenderForConsumerQueueActor"+uuid)
         println("Dedicated message sender to consumer actor init-ed")
-        messageSender ! sendMess
+        messageManager ! ConsumersCommunication(msgSender, topics) //comment it
+//        msgSender ! sendMess
         //TODO 2.create actor for receiving messges from consumer, send it the is
-        val confirmationReceiver = context.actorOf(Props(classOf[ConfirmationReceiver], is, messageManager), "messageSender"+uuid)
+        val confirmationReceiver = context.actorOf(Props(classOf[ConfirmationReceiver], is, msgSender), "confirmationReceiver"+uuid)
         confirmationReceiver ! listenForConsumerMess
         println("Consumer confirmation rcv queue actor init-ed")
 //        val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
@@ -203,35 +235,24 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef, messagesConfi
 /**
  * Actor that passes the producer's messages (from each producer's MessageReceiving queue) to the correct consumer's queue('s).
  * Also, it tells the messages confirmer which consumer has to acknowledge specific messages. 1 instance for all producers and consumers.
- * @param messageConfirmer - reference to the actor that manages the list of consumers and the messages they have to confirm
+ * @param messagesConfirmer - reference to the actor that manages the list of consumers and the messages they have to confirm
  */
-class MessageManager(messageConfirmer : ActorRef) extends Actor{
-  val allMessages = util.ArrayList[Message]()
+
+class MessageManager() extends Actor{
   val consumersList = util.ArrayList[ConsumersCommunication]()
   def receive = {
     case  message : Message =>
       println("adding new message in common list, id = " + message.id)
-      allMessages.add(message)
-      println("All messages:" + allMessages)
       consumersList.forEach(consumer => {
-        val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
-        val oos = new ObjectOutputStream(stream)
-        oos.writeObject(message)
-        oos.close()
-        val retv = new String(
-          Base64.getEncoder().encode(stream.toByteArray),
-          StandardCharsets.UTF_8
-        )
-        if(consumer.topic.equals(message.topic)){
-          println("sending to consumer")
-          consumer.os.println(retv)
+        if (consumer.topic == message.topic) {
+          println("Manager sending to sender")
+          consumer.sender ! message
         }
-        println("sending to manager")
-        messageConfirmer ! ConsumerToAck(consumer, message)
-      }
-      )
-    case os : ConsumersCommunication =>
-      consumersList.add(os)
+//        messagesConfirmer ! ConsumerToAck(consumer, message)
+      })
+    case sender: ConsumersCommunication =>
+      consumersList.add(sender)
+
   }
 }
 
@@ -239,11 +260,8 @@ class MessageManager(messageConfirmer : ActorRef) extends Actor{
 object MessageBroker  extends App{
   val ss = new ServerSocket(4444)
   val brokerSystem = ActorSystem("derDealer")
-  val messageManager = brokerSystem.actorOf(Props(classOf[ConfirmationReceiver]), "messageManagerName")
-  val actorForAllMess = brokerSystem.actorOf(Props(classOf[MessageManager], messageManager), "actorForAllMessName")
-  //TODO create the class messagesConfirmer
-  val messagesConfirmer = brokerSystem.actorOf(Props(classOf[]))
+  val messageManager = brokerSystem.actorOf(Props(classOf[MessageManager]), "actorForAllMessName")
 
-  val actorForConnection = brokerSystem.actorOf(Props(classOf[ConnectionActor], ss, actorForAllMess, messagesConfirmer), "actorForConnection")
+  val actorForConnection = brokerSystem.actorOf(Props(classOf[ConnectionActor], ss, messageManager), "actorForConnection")
   actorForConnection ! listenForConn
 }
