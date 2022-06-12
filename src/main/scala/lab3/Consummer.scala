@@ -16,13 +16,16 @@ import scala.io.Source
 case object receiveMess
 case object confirmMess
 
+/**
+ * Class to receive messages from the broker
+ * @param is - the input stream
+ * @param ps - the output stream
+ */
 class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
 {
   val receivedMessages = new ConcurrentLinkedQueue[Message]()
   def receive = {
     case receiveMess =>
-
-//      println("checking")
       if(is.ready){
         println("received!")
         val input = is.readLine
@@ -65,28 +68,6 @@ class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
 
   }
 }
-
-//class MessagesConfirmer(msgo : Message, is: BufferedReader, ps: PrintStream) extends Actor
-//{
-//
-//  val receivedMessages = new ConcurrentLinkedQueue[Message]()
-//  def receive = {
-//    case confirmMess : Confirm =>
-//      println("Received: " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
-//      receivedMessages.add(msgo)
-//      val msg2 = new Confirm(msgo.id)
-//      println("Sending confirmation:" + msgo.id)
-//      val stream2: ByteArrayOutputStream = new ByteArrayOutputStream()
-//      val oos2 = new ObjectOutputStream(stream2)
-//      oos2.writeObject(msg2)
-//      oos2.close()
-//      val retv2 = new String(
-//        Base64.getEncoder().encode(stream2.toByteArray),
-//        StandardCharsets.UTF_8
-//      )
-//      ps.println(retv2)
-//  }
-//}
 
 
 object Consumer extends App{

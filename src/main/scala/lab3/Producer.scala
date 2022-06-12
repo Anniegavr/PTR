@@ -9,6 +9,10 @@ import java.util.{Base64, UUID}
 
 case object SendMess
 
+/**
+ * Actor that produces messages to be sent to the broker
+ * @param os - output stream through which the actor publishes a message to the broker on the socket connection
+ */
 class MessageSender(os: PrintStream) extends Actor{
   def receive = {
     case SendMess =>

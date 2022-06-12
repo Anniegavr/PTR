@@ -8,20 +8,23 @@ import java.util
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.{Base64, Properties, UUID}
 
-//TODO create objects for consumer's commands
+//objects for consumer's commands
 case object listenForConsumerMess
 case object listenForConfirm
 case object sendMessToConsumer
 
-//TODO create objects for producer's commands
+//objects for producer's commands
 case object listenForMess
 
-//TODO create objects for broker's commands
+//objects for broker's commands
 case object listenForConn
 
-//TODO create class to receive confirm from consumer
-class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef) extends Actor{ //from consumer
-//  val messages = util.ArrayList[Confirm]()
+/**
+ * Class responsible to receive confirmation from the consumer
+ * @param is
+ * @param messageSender
+ */
+class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef) extends Actor{
 
   def receive = {
     case listenForConsumerMess =>
@@ -33,8 +36,7 @@ class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef) extends 
         ois.readObject match {
           case msg: Confirm =>
             println("Confirmatyion received: id:" + msg.id)
-//            messages.add(msg)
-            messageSender ! msg  //this is the manager
+            messageSender ! msg
           case _ => throw new Exception("I didn't subscribe for dis, scammer")
         }
         ois.close()
@@ -43,38 +45,6 @@ class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef) extends 
       self ! listenForConsumerMess
   }
 }
-////TODO fix the duplicate
-//class ConfirmationReceiver() extends Actor{
-//  val messagesToManage = ConcurrentLinkedDeque[ConsumerToAck]()
-//  def receive = {
-//    case cons2ack : ConsumerToAck =>
-//      println("Adding:" + cons2ack.toString)
-//      messagesToManage.add(cons2ack)
-//      println("messages in manager: " + messagesToManage.toString)
-//      //      messagesToManage.forEach(x =>{
-//      self ! ListenForConfirm
-//    //      })
-//    case ListenForConfirm =>
-//      Thread.sleep(100)
-//      messagesToManage.forEach(some=>{
-//        println("checking confirm from:" + some)
-//        if(some.consumersCommunication.is.ready()) {
-//          val input = some.consumersCommunication.is.readLine
-//
-//          val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
-//
-//          val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
-//          ois.readObject match {
-//            case confirm: Confirm =>
-//              println("Confirmation received:" + confirm.toString)
-//              messagesToManage.remove(some)
-//            case _ => throw new Exception("Dis is not a message from client")
-//          }
-//          ois.close()
-//        }
-//      })
-//  }
-//}
 
 /**
  * Actor that sends messages to its dedicated consumer (1 MsgSender per each consumer)
@@ -186,47 +156,20 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef) extends Actor
         println("Producer connected")
       } else if (clientType.equals("consumer")) {
         allConsumers.add(uuid.toString)
-        val topics = is.readLine //should the consumer really subscribe to more than one topic? str.include?ini
+        val topics = is.readLine
         println(topics)
         subscribedTopic.+(uuid -> topics)
         println("Consumer connected for topic "+topics )
 
-        //TODO 1. create an actor to send messages from manager to consumer, send him the os
+        //an actor to send messages from manager to consumer, send him the os
         val msgSender = context.actorOf(Props(classOf[MsgSender], os), "messageSenderForConsumerQueueActor"+uuid)
         println("Dedicated message sender to consumer actor init-ed")
-        messageManager ! ConsumersCommunication(msgSender, topics) //comment it
-//        msgSender ! sendMess
-        //TODO 2.create actor for receiving messges from consumer, send it the is
+        messageManager ! ConsumersCommunication(msgSender, topics)
+        
+        //an actor for receiving messges from consumer, send it the is
         val confirmationReceiver = context.actorOf(Props(classOf[ConfirmationReceiver], is, msgSender), "confirmationReceiver"+uuid)
         confirmationReceiver ! listenForConsumerMess
         println("Consumer confirmation rcv queue actor init-ed")
-//        val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
-//        val oos = new ObjectOutputStream(stream)
-//        oos.writeObject(message)
-//        oos.close()
-//        val retv = new String(
-//          Base64.getEncoder().encode(stream.toByteArray),
-//          StandardCharsets.UTF_8
-//        )
-//        if(consumer.topic.equals(message.topic)){
-//          println("sending to consumer")
-//          consumer.os.println(retv)
-//        }
-
-          //to receive - another actor
-//        if (is.ready) { //if there is a message coming
-//          val input = is.readLine
-//          val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
-//
-//          val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
-//          ois.readObject match {
-//            case msg: Message =>
-//              println("Message received: id:" + msg.id + ", topic:" + msg.topic + ", value:" + msg.value)
-//              messages.add(msg)
-//              actorForAllMess ! msg  //this is the manager
-//            case _ => throw new Exception("Dis is not a message from client, scammer")
-//          }
-//          ois.close()
       }
       self ! listenForConn
   }
@@ -248,14 +191,12 @@ class MessageManager() extends Actor{
           println("Manager sending to sender")
           consumer.sender ! message
         }
-//        messagesConfirmer ! ConsumerToAck(consumer, message)
       })
     case sender: ConsumersCommunication =>
       consumersList.add(sender)
 
   }
 }
-
 
 object MessageBroker  extends App{
   val ss = new ServerSocket(4444)
