@@ -24,7 +24,14 @@ case object confirmMess
 class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
 {
   val receivedMessages = new ConcurrentLinkedQueue[Message]()
-  def receive = {
+
+  override def preStart(): Unit = {
+    println("Consumer "+ self)
+  }
+  override def postStop(): Unit = {
+    println("Consumer: I've stopped :( ")
+  }
+  def receive: Receive = {
     case receiveMess =>
       if(is.ready){
         println("received!")
@@ -48,7 +55,7 @@ class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
         if(!exists){
           println("Received: " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
           receivedMessages.add(msgo)
-          val msg2 = new Confirm(msgo.id)
+          val msg2 = new Confirm(msgo.id, msgo.topic)
           println("Sending confirmation:" + msgo.id)
           val stream2: ByteArrayOutputStream = new ByteArrayOutputStream()
           val oos2 = new ObjectOutputStream(stream2)
@@ -59,11 +66,9 @@ class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
             StandardCharsets.UTF_8
           )
           ps.println(retv2)
-
         }
       }
-      Thread.sleep(100)
-
+      Thread.sleep(1000)
       self ! receiveMess
 
   }
