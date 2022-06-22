@@ -8,7 +8,9 @@ import java.util
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.{Base64, Comparator, Properties, UUID}
 import java.io.*
+import scala.collection.mutable
 import scala.io.Source
+import scala.jdk.CollectionConverters.*
 import scala.util.Try
 //objects for consumer's commands
 case object listenForConsumerMess
@@ -29,7 +31,7 @@ case object sendBackSortedList
  * @param messageSender - the consumer's dedicated sender's reference
  * @param connectionActor - reference to the actor responsible for accepting connections and starting corresponding actors
  */
-class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef, connectionActor: ActorRef) extends Actor{
+class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef, managerActor: ActorRef) extends Actor{
   def receive: Receive = {
     case listenForConsumerMess =>
       if (is.ready) { //if there is a message coming
@@ -39,14 +41,14 @@ class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef, connecti
         val ois = new ObjectInputStream(new ByteArrayInputStream(bytes))
         ois.readObject match {
           case msg: Confirm =>
-            println("Confirmation received: id:" + msg.id + "for topic "+ msg.topic)
-            messageSender ! msg
-            connectionActor ! ConfirmedMess(msg.id, msg.topic)
+            println("Confirmation received: id:" + msg.id + " for topic "+ msg.topic)
+//            messageSender ! msg
+            managerActor ! ConfirmedMess(msg.id)
           case _ => throw new Exception("I didn't subscribe for dis, scammer")
         }
         ois.close()
       }
-      Thread.sleep(10000)
+      Thread.sleep(100)
       self ! listenForConsumerMess
   }
 }
@@ -78,6 +80,7 @@ class MsgSender(os: PrintStream) extends Actor{
         StandardCharsets.UTF_8
       )
       os.println(retv)
+      messagesToSend.remove(0)
     case confirm : Confirm =>
       println("Sender received confirmation for "+confirm.id)
       println("Current queue: ")
@@ -106,7 +109,7 @@ class MsgSender(os: PrintStream) extends Actor{
  * @param messageManager - reference to this context's message manager
  * @param connectionActor - reference to the actor responsible for accepting connections and starting corresponding actors
  */
-class MessageReceiving(is: BufferedReader, messageManager: ActorRef, connectionActor: ActorRef) extends Actor{
+class MessageReceiving(os:PrintStream, is: BufferedReader, messageManager: ActorRef, connectionActor: ActorRef, prodSender: ActorRef) extends Actor{
   val messages: util.ArrayList[Message] = util.ArrayList[Message]()
 
   def receive: Receive = {
@@ -120,16 +123,42 @@ class MessageReceiving(is: BufferedReader, messageManager: ActorRef, connectionA
           case msg: Message =>
             println("Message received: id:" + msg.id + ", topic:" + msg.topic + ", value:" + msg.value)
             messages.add(msg)
-            messageManager ! msg
+            messageManager ! AddMeToList(self, prodSender, msg, 0, 0)
+//            messageManager ! MapReceiverToSender(self, prodSender)
           case _ => throw new Exception("Dis is not a message from client, scammer")
         }
         ois.close()
       }
-      Thread.sleep(1000)
+      Thread.sleep(100)
       self ! listenForMess
+
     case quit =>
       is.close()
       connectionActor ! ProducerQuit(self)
+  }
+}
+
+class ProducerSender(os: PrintStream) extends Actor{
+  val messagesToSend: util.ArrayList[Message] = util.ArrayList[Message]()
+
+  override def postStop(): Unit = {
+    println("Sender stopped :P ")
+  }
+  override def preStart(): Unit = {
+    println("Prod Sender: I am ready")
+  }
+  def receive: Receive = {
+    case confirmedMess: ConfirmedMess =>
+      println("Prod Receiver: confirmation received, id" + confirmedMess.messageId)
+      val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
+      val oos = new ObjectOutputStream(stream)
+      oos.writeObject(confirmedMess)
+      oos.close()
+      val retv = new String(
+        Base64.getEncoder.encode(stream.toByteArray),
+        StandardCharsets.UTF_8
+      )
+      os.println(retv)
 
   }
 }
@@ -144,6 +173,7 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef) extends Actor
   val allProducers: util.ArrayList[String] = util.ArrayList[String]()
   val allConsumers: util.ArrayList[String] = util.ArrayList[String]()
   var allProducersFiles: util.ArrayList[File] = util.ArrayList[File]()
+  val allReceivers: mutable.Map[ActorRef, BufferedReader] = scala.collection.mutable.Map[ActorRef, BufferedReader]()
   def receive: Receive = {
 //    case quit =>
 //      ss.close()
@@ -160,22 +190,24 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef) extends Actor
         val fileObject = new File("producer/producerStream_"+is+".txt" )
         allProducersFiles.add(fileObject)
         //is for receving msges from producer & msgManager to send the received mesg
-        val messageReceiving = context.actorOf(Props(classOf[MessageReceiving], is, messageManager, self), "messageReceivingActor"+uuid)
+        val prodSenderRef = context.actorOf(Props(classOf[ProducerSender], os), "producer"+uuid+"sender")
+        val messageReceiving = context.actorOf(Props(classOf[MessageReceiving], os, is, messageManager, self, prodSenderRef), "messageReceivingActor"+uuid)
+        val thisActorName: String = "messageReceivingActor"+uuid
+        allReceivers(messageReceiving) = is
         messageReceiving ! listenForMess
         println("Producer connected")
       } else if (clientType.equals("consumer")) {
         allConsumers.add(uuid.toString)
         val topics = is.readLine
         println(topics)
-//        subscribedTopic.+(uuid -> topics)
         println("Consumer connected for topic "+topics )
         //an actor to send messages from manager to consumer, send him the os
         val msgSender = context.actorOf(Props(classOf[MsgSender], os), "messageSenderForConsumerQueueActor"+uuid)
         println("Dedicated message sender to consumer actor init-ed")
         messageManager ! ConsumersCommunication(msgSender, topics)
-        
+
         //an actor for receiving messges from consumer, send it the is
-        val confirmationReceiver = context.actorOf(Props(classOf[ConfirmationReceiver], is, msgSender, self), "confirmationReceiver"+uuid)
+        val confirmationReceiver = context.actorOf(Props(classOf[ConfirmationReceiver], is, msgSender, messageManager), "confirmationReceiver"+uuid)
         confirmationReceiver ! listenForConsumerMess
         println("Consumer confirmation rcv queue actor init-ed")
       }
@@ -183,7 +215,7 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef) extends Actor
     case producerQuit: ProducerQuit =>
       allProducers.remove(producerQuit.producer)
     case confirmedMess : ConfirmedMess =>
-      messageManager ! ConfirmedMess(confirmedMess.messageId, confirmedMess.messageTopic)
+      messageManager ! ConfirmedMess(confirmedMess.messageId)
   }
 }
 
@@ -197,7 +229,6 @@ class ListSorter(listToSort : util.ArrayList[Message], messageManager : ActorRef
   var someList: util.ArrayList[Message] = listToSort
   def sortL(): Unit = {
     val n = someList.size()
-//    someList.sort(_.priority.<(:Message))
     someList.forEach( mess => {
       var min_idx = someList.indexOf(mess)
       val i = min_idx
@@ -207,9 +238,6 @@ class ListSorter(listToSort : util.ArrayList[Message], messageManager : ActorRef
         if (someList.get(j).priority < someList.get(min_idx).priority) {
           min_idx = j
         }
-        // Swap the found minimum element with the first
-        // element
-
         someList.set(min_idx, someList.get(i))
         someList.set(i, temp)
       }
@@ -227,10 +255,6 @@ class ListSorter(listToSort : util.ArrayList[Message], messageManager : ActorRef
         println("Finshed to sort empty list, kiss")
         messageManager ! SortedList(someList, someList.get(0).topic)
       }
-
-//      self ! sendBackSortedList
-//    case sendBackSortedList =>
-
   }
 }
 
@@ -244,10 +268,12 @@ class MessageManager() extends Actor{
   val topicTroopers: util.ArrayList[Message] = util.ArrayList[Message]()
   val topicYoda: util.ArrayList[Message] = util.ArrayList[Message]()
   val topicMandalorian: util.ArrayList[Message] = util.ArrayList[Message]()
+
   val yodaSorterActor: ActorRef = context.actorOf(Props(classOf[ListSorter], topicYoda, self))
   val troopersSorterActor: ActorRef = context.actorOf(Props(classOf[ListSorter], topicTroopers, self))
   val mandalorianSorterActor: ActorRef = context.actorOf(Props(classOf[ListSorter], topicMandalorian, self))
-  var unrecorderMessages = 0
+
+  var allProducers  = util.ArrayList[AddMeToList]
   var messageNeeds2bSent = true
   val file = new File("allMessages.txt")
 
@@ -271,7 +297,9 @@ class MessageManager() extends Actor{
   def receive: Receive = {
     case connection: ConsumersCommunication =>
       consumersList.add(connection)
-    case message: Message =>
+    case addMeToList: AddMeToList =>
+      val message = addMeToList.message
+      allProducers.add(addMeToList)
       println("adding new message in common list for this topic, id = " + message.id)
       if (message.topic == "Yoda") {
         topicYoda.add(message)
@@ -290,15 +318,29 @@ class MessageManager() extends Actor{
           mandalorianSorterActor ! sortThisList
         }
       }
-      unrecorderMessages+=1
-      if (unrecorderMessages == 20){
-        val bw = new BufferedWriter(new FileWriter(file))
-        bw.write(topicYoda.toString)
-        bw.write(topicTroopers.toString)
-        bw.write(topicMandalorian.toString)
 
-        bw.close()
+    case confirmedMess: ConfirmedMess =>
+//      println("One more confirmation for message "+confirmedMess.messageId)
+      if(!allProducers.isEmpty) {
+        var entryToDelete = allProducers.get(0)
+        var msgWasSend = false
+        allProducers.forEach(prod => {
+          if (prod.message.id == confirmedMess.messageId) {
+            println("Manager Received 1 more confirmation, msg id" + confirmedMess.messageId + ", used to be " + prod.confirmedBy)
+            prod.confirmedBy += 1
+            if (prod.sentTo == prod.confirmedBy) {
+              println("Manager: All confirmed, sending confirmation to producer receiver")
+              prod.producerSender ! confirmedMess
+              entryToDelete = prod
+              msgWasSend = true
+            }
+          }
+        })
+        if (msgWasSend) {
+          allProducers.remove(entryToDelete)
+        }
       }
+
     case sender: ConsumersCommunication =>
       consumersList.add(sender)
     case sortedList: SortedList =>
@@ -317,7 +359,7 @@ class MessageManager() extends Actor{
       self ! getToWork
     case getToWork =>
       println("GOOD")
-
+      val sentMessage = util.ArrayList[Message]
       topicYoda.forEach(yodaMessage => {
         println("manager: msg need sent "+ messageNeeds2bSent)
         if (messageNeeds2bSent) {
@@ -326,31 +368,61 @@ class MessageManager() extends Actor{
             println("Manager: for each consumer ")
             if (consumer.topic == "Yoda") {
               consumer.sender ! yodaMessage
+              allProducers.forEach(produ => {
+                if(produ.message.id == yodaMessage.id){
+                  produ.sentTo+=1
+                }
+              })
+              sentMessage.add(yodaMessage)
               messageNeeds2bSent = false
             }
           })
         }
       })
+      sentMessage.forEach(msgToDelete => {
+        topicYoda.remove(msgToDelete)
+      })
+      sentMessage.clear()
       topicTroopers.forEach( troopMessage => {
         if (messageNeeds2bSent) {
           consumersList.forEach(consumer => {
             if (consumer.topic == "troopers") {
               consumer.sender ! troopMessage
+              allProducers.forEach(produ => {
+                if(produ.message.id == troopMessage.id){
+                  produ.sentTo+=1
+                }
+              })
+              sentMessage.add(troopMessage)
               messageNeeds2bSent = false
             }
           })
         }
       })
+      sentMessage.forEach(msgToDelete => {
+        topicTroopers.remove(msgToDelete)
+      })
+      sentMessage.clear()
       topicMandalorian.forEach( mandalorianMessage => {
         if (messageNeeds2bSent) {
           consumersList.forEach(consumer => {
             if (consumer.topic == "Mandalorians") {
               consumer.sender ! mandalorianMessage
+              allProducers.forEach(produ => {
+                if(produ.message.id == mandalorianMessage.id){
+                  produ.sentTo+=1
+                }
+              })
+              sentMessage.add(mandalorianMessage)
               messageNeeds2bSent = false
             }
           })
         }
       })
+      sentMessage.forEach(msgToDelete => {
+        topicMandalorian.remove(msgToDelete)
+      })
+      sentMessage.clear()
 //        println("Manager: ich bin gut boy")
   }
 }
