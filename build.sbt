@@ -1,8 +1,8 @@
 import sbt.Keys.libraryDependencies
-
-course := "reactive"
-assignment := "actorbintree"
-
+//
+//course := "reactive"
+//assignment := "actorbintree"
+//
 Test / parallelExecution := false
 
 val akkaVersion = "2.6.19"
@@ -21,5 +21,5 @@ libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-testkit" % akkaVersion % Test,
 )
 //Compile / run / mainClass := Some("lab3.MessageBroker")
-Compile / run / mainClass := Some("lab3.Consumer")
-//Compile / run / mainClass := Some("lab3.Producer")
+//Compile / run / mainClass := Some("lab3.Consumer")
+Compile / run / mainClass := Some("lab3.Producer")
