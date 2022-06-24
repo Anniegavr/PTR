@@ -42,13 +42,13 @@ class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef, managerA
         ois.readObject match {
           case msg: Confirm =>
             println("Confirmation received: id:" + msg.id + " for topic "+ msg.topic)
-//            messageSender ! msg
-            managerActor ! ConfirmedMess(msg.id)
+            messageSender ! msg
+//            managerActor ! ConfirmedMess(msg.id)
           case _ => throw new Exception("I didn't subscribe for dis, scammer")
         }
         ois.close()
       }
-      Thread.sleep(100)
+      Thread.sleep(5)
       self ! listenForConsumerMess
   }
 }
@@ -57,9 +57,11 @@ class ConfirmationReceiver(is: BufferedReader, messageSender: ActorRef, managerA
  * Actor that sends messages to its dedicated consumer (1 MsgSender per each consumer)
  * @param os - output stream - the stream to which the sender publishes messages
  */
-class MsgSender(os: PrintStream) extends Actor{
-  val messagesToSend: util.ArrayList[Message] = util.ArrayList[Message]()
-
+class MsgSender(os: PrintStream, messageManager: ActorRef, consumerId: String) extends Actor{
+  var messagesToSend: util.ArrayList[Message] = util.ArrayList[Message]()
+  var numOfTimesMsgWasSent: Map[String, Int] = Map[String, Int]()
+  var numberOfTimesFirstMsgWasSent = 0
+  var messageDidNotGetConfirm: util.ArrayList[String] = util.ArrayList[String]()
   override def postStop(): Unit = {
     println("Sender stopped :P ")
   }
@@ -69,7 +71,6 @@ class MsgSender(os: PrintStream) extends Actor{
   def receive: Receive = {
     case message : Message =>
       println("Sender: New message with id "+message.id)
-
       messagesToSend.add(message)
       val stream: ByteArrayOutputStream = new ByteArrayOutputStream()
       val oos = new ObjectOutputStream(stream)
@@ -80,23 +81,60 @@ class MsgSender(os: PrintStream) extends Actor{
         StandardCharsets.UTF_8
       )
       os.println(retv)
-      messagesToSend.remove(0)
+      println("Consumer Sender: sent a message to consumer")
+
+      if(messageDidNotGetConfirm.contains(messagesToSend.get(0).id)){
+        println("Consumer sender: retried to send this message just now. " + messagesToSend.get(0).id)
+        if(numOfTimesMsgWasSent.contains(messagesToSend.get(0).id)){
+          println("Consumer Sender: this message was sent "+numberOfTimesFirstMsgWasSent+" times")
+          //          numOfTimesMsgWasSent.get(messagesToSend.get(0).id).->(numOfTimesMsgWasSent(messagesToSend.get(0).id)+1)// = numOfTimesMsgWasSent.get(messagesToSend.get(0).id).get+1
+
+          println("Consumer Sender: incremented num of sent times for message "+messagesToSend.get(0).id)
+          if (numberOfTimesFirstMsgWasSent == 3){
+            messageManager ! RemoveMissingConsumer(consumerId, self)
+            println("Consumer Sender: this consumer "+consumerId+" has stopped answering." +
+              "A message to stop it was sent to the manager.")
+            Thread.sleep(100)
+            context.stop(self)
+            //          numberOfTimesFirstMsgWasSent = 0
+
+          }else{
+            numberOfTimesFirstMsgWasSent += 1
+          }
+        }
+
+      } else if (!messageDidNotGetConfirm.contains(message.id)){
+        messageDidNotGetConfirm.add(message.id)
+        numOfTimesMsgWasSent = numOfTimesMsgWasSent+(message.id -> 0)
+//        numberOfTimesFirstMsgWasSent +=1
+        println("Consumer Sender: got a first time message "+ message.id)
+      }
+
     case confirm : Confirm =>
       println("Sender received confirmation for "+confirm.id)
       println("Current queue: ")
-      var idOfMsgToDelete = 0
+      var idxOfMsgToDelete = 0
       var incrementId = true
       messagesToSend.forEach( message => {
         println(message.id)
         if (confirm.id == message.id) {
           incrementId = false
+          messageManager ! ConfirmedMess(message.id)
         }
         if (incrementId){
-          idOfMsgToDelete+=1
+          idxOfMsgToDelete+=1
         }
       })
-      println("Sender: removing message "+messagesToSend.get(idOfMsgToDelete).id)
-      messagesToSend.remove(idOfMsgToDelete)
+      println("Sender: removing message "+messagesToSend.get(idxOfMsgToDelete).id)
+      messagesToSend.remove(idxOfMsgToDelete)
+      numberOfTimesFirstMsgWasSent = 0
+      if (messageDidNotGetConfirm.contains(confirm.id)){
+        messageDidNotGetConfirm.remove(confirm.id)
+        println("Consumer Sender: removed message that got confirmation "+confirm.id)
+      }else{
+        println("Consumer sender: failed to remove id of confirmed message from" +
+          "list of messages waiting for confirm. Id: "+ confirm.id)
+      }
 
       println("Sender: msg 2 send size: "+messagesToSend.size().toString)
 
@@ -108,6 +146,7 @@ class MsgSender(os: PrintStream) extends Actor{
  * @param is - a buffered reader through which the broker receives and decodes messages
  * @param messageManager - reference to this context's message manager
  * @param connectionActor - reference to the actor responsible for accepting connections and starting corresponding actors
+ * @param prodSender - reference to the actor sending messages from the broker to the producer
  */
 class MessageReceiving(os:PrintStream, is: BufferedReader, messageManager: ActorRef, connectionActor: ActorRef, prodSender: ActorRef) extends Actor{
   val messages: util.ArrayList[Message] = util.ArrayList[Message]()
@@ -124,12 +163,11 @@ class MessageReceiving(os:PrintStream, is: BufferedReader, messageManager: Actor
             println("Message received: id:" + msg.id + ", topic:" + msg.topic + ", value:" + msg.value)
             messages.add(msg)
             messageManager ! AddMeToList(self, prodSender, msg, 0, 0)
-//            messageManager ! MapReceiverToSender(self, prodSender)
           case _ => throw new Exception("Dis is not a message from client, scammer")
         }
         ois.close()
       }
-      Thread.sleep(100)
+      Thread.sleep(5)
       self ! listenForMess
 
     case quit =>
@@ -179,7 +217,6 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef) extends Actor
 //      ss.close()
     case listenForConn =>
       val sock = ss.accept()
-      val subscribedTopic:Map[String,String] = Map()
       val is = new BufferedReader(new InputStreamReader(sock.getInputStream))
       val os = new PrintStream(sock.getOutputStream)
       val uuid = UUID.randomUUID()
@@ -202,7 +239,7 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef) extends Actor
         println(topics)
         println("Consumer connected for topic "+topics )
         //an actor to send messages from manager to consumer, send him the os
-        val msgSender = context.actorOf(Props(classOf[MsgSender], os), "messageSenderForConsumerQueueActor"+uuid)
+        val msgSender = context.actorOf(Props(classOf[MsgSender], os, messageManager, uuid.toString), "messageSenderForConsumerQueueActor"+uuid)
         println("Dedicated message sender to consumer actor init-ed")
         messageManager ! ConsumersCommunication(msgSender, topics)
 
@@ -214,6 +251,12 @@ class ConnectionActor(ss: ServerSocket, messageManager : ActorRef) extends Actor
       self ! listenForConn
     case producerQuit: ProducerQuit =>
       allProducers.remove(producerQuit.producer)
+//    case removeMissingConsumer: RemoveMissingConsumer =>
+//      println("Conn actor: consumer missing, will remove it.")
+//      allConsumers.remove(removeMissingConsumer.consumerSenderId)
+//      context.stop(removeMissingConsumer.consumerSenderRef)
+////      removeMissingConsumer.consumerSenderRef ! PoisonPill
+//      messageManager ! RemoveMissingConsumer(removeMissingConsumer.consumerSenderId, removeMissingConsumer.consumerSenderRef)
     case confirmedMess : ConfirmedMess =>
       messageManager ! ConfirmedMess(confirmedMess.messageId)
   }
@@ -268,7 +311,7 @@ class MessageManager() extends Actor{
   val topicTroopers: util.ArrayList[Message] = util.ArrayList[Message]()
   val topicYoda: util.ArrayList[Message] = util.ArrayList[Message]()
   val topicMandalorian: util.ArrayList[Message] = util.ArrayList[Message]()
-
+  val freeToRemove: Boolean = false
   val yodaSorterActor: ActorRef = context.actorOf(Props(classOf[ListSorter], topicYoda, self))
   val troopersSorterActor: ActorRef = context.actorOf(Props(classOf[ListSorter], topicTroopers, self))
   val mandalorianSorterActor: ActorRef = context.actorOf(Props(classOf[ListSorter], topicMandalorian, self))
@@ -318,12 +361,22 @@ class MessageManager() extends Actor{
           mandalorianSorterActor ! sortThisList
         }
       }
+    case removeMissingConsumer: RemoveMissingConsumer =>
+      println("Manager: removing consumer (sender) from this list")
+      var idxOfConsumer2Rmv = 0
+      consumersList.forEach(consum => {
+        if (consum.sender == removeMissingConsumer.consumerSenderRef){
+          println("Manager removing consumer")
+          idxOfConsumer2Rmv = consumersList.indexOf(consum)
+        }
+      })
+      consumersList.remove(idxOfConsumer2Rmv)
 
     case confirmedMess: ConfirmedMess =>
 //      println("One more confirmation for message "+confirmedMess.messageId)
       if(!allProducers.isEmpty) {
         var entryToDelete = allProducers.get(0)
-        var msgWasSend = false
+        var msgWasSent = false
         allProducers.forEach(prod => {
           if (prod.message.id == confirmedMess.messageId) {
             println("Manager Received 1 more confirmation, msg id" + confirmedMess.messageId + ", used to be " + prod.confirmedBy)
@@ -332,15 +385,14 @@ class MessageManager() extends Actor{
               println("Manager: All confirmed, sending confirmation to producer receiver")
               prod.producerSender ! confirmedMess
               entryToDelete = prod
-              msgWasSend = true
+              msgWasSent = true
             }
           }
         })
-        if (msgWasSend) {
+        if (msgWasSent) {
           allProducers.remove(entryToDelete)
         }
       }
-
     case sender: ConsumersCommunication =>
       consumersList.add(sender)
     case sortedList: SortedList =>
@@ -360,70 +412,72 @@ class MessageManager() extends Actor{
     case getToWork =>
       println("GOOD")
       val sentMessage = util.ArrayList[Message]
-      topicYoda.forEach(yodaMessage => {
-        println("manager: msg need sent "+ messageNeeds2bSent)
-        if (messageNeeds2bSent) {
-          println("Manager: checking Yoda message")
-          consumersList.forEach(consumer => {
-            println("Manager: for each consumer ")
-            if (consumer.topic == "Yoda") {
-              consumer.sender ! yodaMessage
-              allProducers.forEach(produ => {
-                if(produ.message.id == yodaMessage.id){
-                  produ.sentTo+=1
-                }
-              })
-              sentMessage.add(yodaMessage)
-              messageNeeds2bSent = false
-            }
-          })
-        }
-      })
-      sentMessage.forEach(msgToDelete => {
-        topicYoda.remove(msgToDelete)
-      })
-      sentMessage.clear()
-      topicTroopers.forEach( troopMessage => {
-        if (messageNeeds2bSent) {
-          consumersList.forEach(consumer => {
-            if (consumer.topic == "troopers") {
-              consumer.sender ! troopMessage
-              allProducers.forEach(produ => {
-                if(produ.message.id == troopMessage.id){
-                  produ.sentTo+=1
-                }
-              })
-              sentMessage.add(troopMessage)
-              messageNeeds2bSent = false
-            }
-          })
-        }
-      })
-      sentMessage.forEach(msgToDelete => {
-        topicTroopers.remove(msgToDelete)
-      })
-      sentMessage.clear()
-      topicMandalorian.forEach( mandalorianMessage => {
-        if (messageNeeds2bSent) {
-          consumersList.forEach(consumer => {
-            if (consumer.topic == "Mandalorians") {
-              consumer.sender ! mandalorianMessage
-              allProducers.forEach(produ => {
-                if(produ.message.id == mandalorianMessage.id){
-                  produ.sentTo+=1
-                }
-              })
-              sentMessage.add(mandalorianMessage)
-              messageNeeds2bSent = false
-            }
-          })
-        }
-      })
-      sentMessage.forEach(msgToDelete => {
-        topicMandalorian.remove(msgToDelete)
-      })
-      sentMessage.clear()
-//        println("Manager: ich bin gut boy")
+      if (consumersList.size()>0) {
+        topicYoda.forEach(yodaMessage => {
+          println("manager: msg need sent " + messageNeeds2bSent)
+          if (messageNeeds2bSent) {
+            println("Manager: checking Yoda message")
+            consumersList.forEach(consumer => {
+              println("Manager: for each consumer ")
+              if (consumer.topic == "Yoda") {
+                consumer.sender ! yodaMessage
+                allProducers.forEach(produ => {
+                  if (produ.message.id == yodaMessage.id) {
+                    produ.sentTo += 1
+                  }
+                })
+                sentMessage.add(yodaMessage)
+                messageNeeds2bSent = false
+              }
+            })
+          }
+        })
+        sentMessage.forEach(msgToDelete => {
+          topicYoda.remove(msgToDelete)
+        })
+        sentMessage.clear()
+        topicTroopers.forEach(troopMessage => {
+          if (messageNeeds2bSent) {
+            consumersList.forEach(consumer => {
+              if (consumer.topic == "troopers") {
+                consumer.sender ! troopMessage
+                allProducers.forEach(produ => {
+                  if (produ.message.id == troopMessage.id) {
+                    produ.sentTo += 1
+                  }
+                })
+                sentMessage.add(troopMessage)
+                messageNeeds2bSent = false
+              }
+            })
+          }
+        })
+        sentMessage.forEach(msgToDelete => {
+          topicTroopers.remove(msgToDelete)
+        })
+        sentMessage.clear()
+        topicMandalorian.forEach(mandalorianMessage => {
+          if (messageNeeds2bSent) {
+            consumersList.forEach(consumer => {
+              if (consumer.topic == "Mandalorians") {
+                consumer.sender ! mandalorianMessage
+                allProducers.forEach(produ => {
+                  if (produ.message.id == mandalorianMessage.id) {
+                    produ.sentTo += 1
+                  }
+                })
+                sentMessage.add(mandalorianMessage)
+                messageNeeds2bSent = false
+              }
+            })
+          }
+        })
+        sentMessage.forEach(msgToDelete => {
+          topicMandalorian.remove(msgToDelete)
+        })
+        sentMessage.clear()
+        //        println("Manager: ich bin gut boy")
+      }
   }
 }
 

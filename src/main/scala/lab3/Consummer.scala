@@ -21,19 +21,18 @@ case object confirmMess
  * @param is - the input stream
  * @param ps - the output stream
  */
-class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
-{
-//  val receivedMessages = new ConcurrentLinkedQueue[Message]()
-
+class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor {
   override def preStart(): Unit = {
-    println("Consumer "+ self)
+    println("Consumer " + self)
   }
+
   override def postStop(): Unit = {
     println("Consumer: I've stopped :( ")
   }
+
   def receive: Receive = {
     case receiveMess =>
-      if(is.ready){
+      if (is.ready) {
         println("received!")
         val input = is.readLine
         val bytes = Base64.getDecoder.decode(input.getBytes(StandardCharsets.UTF_8))
@@ -47,19 +46,19 @@ class ConsumerMessagesReceive(is: BufferedReader, ps: PrintStream) extends Actor
 
         println("Received: " + msgo.topic + " " + msgo.value + "| priority " + msgo.priority)
 
-        val msg2 = new Confirm(msgo.id, msgo.topic)
-        println("Sending confirmation:" + msgo.id)
-        val stream2: ByteArrayOutputStream = new ByteArrayOutputStream()
-        val oos2 = new ObjectOutputStream(stream2)
-        oos2.writeObject(msg2)
-        oos2.close()
-        val retv2 = new String(
-          Base64.getEncoder().encode(stream2.toByteArray),
-          StandardCharsets.UTF_8
-        )
-        ps.println(retv2)
+        //        val msg2 = new Confirm(msgo.id, msgo.topic)
+        //        println("Sending confirmation:" + msgo.id)
+        //        val stream2: ByteArrayOutputStream = new ByteArrayOutputStream()
+        //        val oos2 = new ObjectOutputStream(stream2)
+        //        oos2.writeObject(msg2)
+        //        oos2.close()
+        //        val retv2 = new String(
+        //          Base64.getEncoder().encode(stream2.toByteArray),
+        //          StandardCharsets.UTF_8
+        //        )
+        //        ps.println(retv2)
       }
-      Thread.sleep(100)
+//      Thread.sleep(100)
       self ! receiveMess
   }
 }

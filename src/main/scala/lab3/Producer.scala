@@ -34,6 +34,7 @@ class MessageSender(os: PrintStream) extends Actor{
 //    case confirmedMess: ConfirmedMess
     case SendMess =>
       val producerValueType = List[String]("troopers", "Yoda", "Mandalorians")
+      
 
       val chosenTopic = scala.util.Random.between(0,2)
       val priority  = scala.util.Random.between(0,3)
